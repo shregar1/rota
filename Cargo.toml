@@ -10,6 +10,9 @@ readme = "README.md"
 keywords = ["load-balancing", "balancer", "networking", "async", "pool"]
 categories = ["network-programming", "asynchronous"]
 
+[features]
+bench = []
+
 [dependencies]
 thiserror = "2"
 tokio = { version = "1", features = ["net", "rt", "sync", "time", "io-util", "macros"] }
@@ -20,3 +23,9 @@ rand = "0.8"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
+criterion = "0.5"
+proptest = "1.0"
+
+[[bench]]
+name = "strategies"
+harness = false

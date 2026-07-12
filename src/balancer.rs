@@ -1,4 +1,4 @@
-//! The `LoadBalancer` — N tunnels, distributed by a strategy.
+//! The `LoadBalancer` — N backends, distributed by a strategy.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -9,55 +9,62 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::backend::{Backend, Connection};
 use crate::error::Error;
-use crate::factory::{FactoryOutput, TunnelFactory};
+use crate::factory::{BackendFactory, BackendOutput};
 use crate::strategy::{BalanceStrategy, PoolView, TunnelMetrics};
-use crate::tunnel::{Stream, Tunnel};
 
-/// The load balancer: N tunnels, dial distributed across them by the
+/// The load balancer: N backends, dial distributed across them by the
 /// configured strategy.
 pub struct LoadBalancer {
-    tunnels: Vec<Box<dyn Tunnel>>,
+    backends: Vec<Box<dyn Backend>>,
     metrics: Arc<Mutex<Vec<TunnelMetrics>>>,
     strategy: Arc<Mutex<Box<dyn BalanceStrategy>>>,
     _cancel_token: CancellationToken,
 }
 
+impl std::fmt::Debug for LoadBalancer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LoadBalancer")
+            .field("backend_count", &self.backends.len())
+            .finish_non_exhaustive()
+    }
+}
+
 impl LoadBalancer {
-    /// Build a load balancer from a pre-constructed set of tunnels. Use this
-    /// when you have tunnels ready to go (e.g. for tests, or for backends
+    /// Build a load balancer from a pre-constructed set of backends. Use this
+    /// when you have backends ready to go (e.g. for tests, or for backends
     /// that don't need a per-instance setup handshake). For backends that
     /// need to register/connect, use [`from_factories`](Self::from_factories).
     ///
-    /// Initial metrics for each tunnel default to zero. To seed an RTT, use
+    /// Initial metrics for each backend default to zero. To seed an RTT, use
     /// [`new_with_metrics`](Self::new_with_metrics).
     pub fn new(
-        tunnels: Vec<Box<dyn Tunnel>>,
+        backends: Vec<Box<dyn Backend>>,
         strategy: impl BalanceStrategy + 'static,
     ) -> Result<Self, Error> {
-        Self::new_with_metrics(tunnels, Vec::new(), strategy)
+        Self::new_with_metrics(backends, Vec::new(), strategy)
     }
 
-    /// Like [`new`](Self::new) but lets the caller seed each tunnel's
-    /// initial metrics. `initial_metrics.len()` must equal
-    /// `tunnels.len()`.
+    /// Like [`new`](Self::new) but lets the caller seed each backend's
+    /// initial metrics. `initial_metrics.len()` must equal `backends.len()`.
     pub fn new_with_metrics(
-        tunnels: Vec<Box<dyn Tunnel>>,
+        backends: Vec<Box<dyn Backend>>,
         initial_metrics: Vec<TunnelMetrics>,
         strategy: impl BalanceStrategy + 'static,
     ) -> Result<Self, Error> {
-        if tunnels.is_empty() {
-            return Err(Error::NoTunnels);
+        if backends.is_empty() {
+            return Err(Error::NoBackends);
         }
-        if initial_metrics.len() != tunnels.len() {
+        if initial_metrics.len() != backends.len() {
             return Err(Error::Factory(format!(
-                "initial_metrics.len() ({}) must equal tunnels.len() ({})",
+                "initial_metrics.len() ({}) must equal backends.len() ({})",
                 initial_metrics.len(),
-                tunnels.len()
+                backends.len()
             )));
         }
         Ok(Self {
-            tunnels,
+            backends,
             metrics: Arc::new(Mutex::new(initial_metrics)),
             strategy: Arc::new(Mutex::new(Box::new(strategy))),
             _cancel_token: CancellationToken::new(),
@@ -65,35 +72,35 @@ impl LoadBalancer {
     }
 
     /// Build a load balancer by running each factory's `create` once. Use
-    /// this when tunnel construction requires network I/O, registration, or
+    /// this when backend construction requires network I/O, registration, or
     /// credentials.
     pub async fn from_factories(
-        factories: Vec<Box<dyn TunnelFactory>>,
+        factories: Vec<Box<dyn BackendFactory>>,
         strategy: impl BalanceStrategy + 'static,
     ) -> Result<Self, Error> {
         if factories.is_empty() {
-            return Err(Error::NoTunnels);
+            return Err(Error::NoBackends);
         }
-        let mut tunnels = Vec::with_capacity(factories.len());
+        let mut backends = Vec::with_capacity(factories.len());
         let mut metrics = Vec::with_capacity(factories.len());
         for f in &factories {
-            let FactoryOutput { tunnel, initial_metrics } = f.create().await?;
-            tunnels.push(tunnel);
+            let BackendOutput { backend, initial_metrics } = f.create().await?;
+            backends.push(backend);
             metrics.push(initial_metrics);
         }
         Ok(Self {
-            tunnels,
+            backends,
             metrics: Arc::new(Mutex::new(metrics)),
             strategy: Arc::new(Mutex::new(Box::new(strategy))),
             _cancel_token: CancellationToken::new(),
         })
     }
 
-    /// Open a TCP connection through one of the active tunnels, chosen by
-    /// the configured strategy. Returns a [`GuardedStream`] which
-    /// implements `AsyncRead + AsyncWrite` and decrements the tunnel's
+    /// Open a TCP connection through one of the active backends, chosen by
+    /// the configured strategy. Returns a [`GuardedConnection`] which
+    /// implements `AsyncRead + AsyncWrite` and decrements the backend's
     /// `active_connections` count on drop.
-    pub async fn dial(&self, addr: &str) -> Result<GuardedStream, Error> {
+    pub async fn dial(&self, addr: &str) -> Result<GuardedConnection, Error> {
         validate_dial_addr(addr)?;
 
         // Pick + increment active count atomically (so strategies that
@@ -113,9 +120,9 @@ impl LoadBalancer {
 
         // Open the connection. On failure, roll back the counter and
         // notify the strategy so it can adapt (e.g. Failover rotates).
-        let stream_result = self.tunnels[idx].dial(addr).await;
-        let stream = match stream_result {
-            Ok(s) => s,
+        let conn_result = self.backends[idx].dial(addr).await;
+        let conn = match conn_result {
+            Ok(c) => c,
             Err(e) => {
                 let mut metrics = self.metrics.lock().await;
                 metrics[idx].active_connections =
@@ -134,43 +141,50 @@ impl LoadBalancer {
             index: idx,
         };
 
-        Ok(GuardedStream {
-            inner: stream,
+        Ok(GuardedConnection {
+            inner: conn,
             _guard: guard,
         })
     }
 
-    /// Read-only access to the live per-tunnel metrics. Useful for logging
+    /// Read-only access to the live per-backend metrics. Useful for logging
     /// or external monitoring.
     pub async fn metrics(&self) -> Vec<TunnelMetrics> {
         self.metrics.lock().await.clone()
     }
 
-    /// Number of active tunnels in the pool.
-    pub fn tunnel_count(&self) -> usize {
-        self.tunnels.len()
+    /// Number of active backends in the pool.
+    pub fn backend_count(&self) -> usize {
+        self.backends.len()
     }
 
-    /// Tear every active tunnel down and release resources.
+    /// Tear every active backend down and release resources.
     pub async fn shutdown(self) {
         self._cancel_token.cancel();
-        for tunnel in self.tunnels {
-            tunnel.shutdown().await;
+        for backend in self.backends {
+            backend.shutdown().await;
         }
     }
 }
 
 // ============================================================================
-//  Stream wrapper
+//  Connection wrapper
 // ============================================================================
 
-/// A stream returned by [`LoadBalancer::dial`]. Wraps the inner stream
-/// returned by `Tunnel::dial` plus a drop guard that decrements the
-/// tunnel's `active_connections` count. Implements `AsyncRead +
-/// AsyncWrite` so it's a drop-in replacement for the inner stream.
-pub struct GuardedStream {
-    inner: Stream,
+/// A connection returned by [`LoadBalancer::dial`]. Wraps the inner connection
+/// returned by `Backend::dial` plus a drop guard that decrements the
+/// backend's `active_connections` count. Implements `AsyncRead + AsyncWrite`
+/// so it's a drop-in replacement for the inner connection.
+pub struct GuardedConnection {
+    inner: Connection,
     _guard: ActiveConnectionGuard,
+}
+
+impl std::fmt::Debug for GuardedConnection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GuardedConnection")
+            .finish_non_exhaustive()
+    }
 }
 
 struct ActiveConnectionGuard {
@@ -192,7 +206,7 @@ impl Drop for ActiveConnectionGuard {
     }
 }
 
-impl AsyncRead for GuardedStream {
+impl AsyncRead for GuardedConnection {
     fn poll_read(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
@@ -202,7 +216,7 @@ impl AsyncRead for GuardedStream {
     }
 }
 
-impl AsyncWrite for GuardedStream {
+impl AsyncWrite for GuardedConnection {
     fn poll_write(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,

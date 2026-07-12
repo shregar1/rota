@@ -8,6 +8,7 @@ use std::time::Duration;
 ///
 /// The view borrows from the load balancer so strategies see the metrics
 /// at the moment of the dial — no atomics or channels.
+#[derive(Debug, Clone, Copy)]
 pub struct PoolView<'a> {
     /// The address being dialed. Available to address-aware strategies
     /// (e.g. `HashByAddr`).
@@ -17,10 +18,12 @@ pub struct PoolView<'a> {
 }
 
 impl<'a> PoolView<'a> {
+    /// Returns the number of tunnels in the pool.
     pub fn len(&self) -> usize {
         self.metrics.len()
     }
 
+    /// Returns `true` if the pool contains no tunnels.
     pub fn is_empty(&self) -> bool {
         self.metrics.is_empty()
     }

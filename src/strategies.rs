@@ -21,19 +21,15 @@ use crate::strategy::TunnelMetrics;
 
 /// Walk tunnels in order, wrapping at the end. Even distribution, no metrics
 /// needed. Best cheap default.
+#[derive(Debug, Clone, Copy)]
 pub struct RoundRobin {
     next: usize,
 }
 
 impl RoundRobin {
+    /// Create a new round-robin strategy starting at index 0.
     pub fn new() -> Self {
         Self { next: 0 }
-    }
-}
-
-impl Default for RoundRobin {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -56,17 +52,13 @@ impl BalanceStrategy for RoundRobin {
 
 /// Random pick. Even distribution in expectation, no state. Good fallback
 /// when no metrics are available.
+#[derive(Debug, Clone, Copy)]
 pub struct Random;
 
 impl Random {
+    /// Create a new random strategy.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for Random {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -86,17 +78,13 @@ impl BalanceStrategy for Random {
 /// Always pick the tunnel with the lowest measured RTT. Ties broken by
 /// index. Best for latency-sensitive workloads (gaming, voice). All traffic
 /// goes to one tunnel; the others are standby.
+#[derive(Debug, Clone, Copy)]
 pub struct LowestRtt;
 
 impl LowestRtt {
+    /// Create a new lowest-RTT strategy.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for LowestRtt {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -126,17 +114,13 @@ impl BalanceStrategy for LowestRtt {
 /// Pick the tunnel with the fewest active connections. Ties broken by
 /// lowest RTT. Adaptive: spreads load evenly across tunnels as connection
 /// lifetimes differ.
+#[derive(Debug, Clone, Copy)]
 pub struct LeastConnections;
 
 impl LeastConnections {
+    /// Create a new least-connections strategy.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for LeastConnections {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -171,17 +155,13 @@ impl BalanceStrategy for LeastConnections {
 /// goes to the same tunnel — best for HTTP/HTTPS keep-alive, server-side
 /// connection caching, and any protocol that benefits from sticky
 /// connections.
+#[derive(Debug, Clone, Copy)]
 pub struct HashByAddr;
 
 impl HashByAddr {
+    /// Create a new hash-by-address strategy.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for HashByAddr {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -205,6 +185,7 @@ impl BalanceStrategy for HashByAddr {
 /// tunnel goes idle as long as there's any weight on it.
 ///
 /// Weight = `max(1, 1000 / rtt_ms)`. Tunnels with no RTT get weight 1.
+#[derive(Debug, Clone)]
 pub struct WeightedRoundRobin {
     rtts: Vec<Option<Duration>>,
     sequence: Vec<usize>,
@@ -212,6 +193,7 @@ pub struct WeightedRoundRobin {
 }
 
 impl WeightedRoundRobin {
+    /// Create a new weighted round-robin strategy.
     pub fn new() -> Self {
         Self {
             rtts: Vec::new(),
@@ -235,12 +217,6 @@ impl WeightedRoundRobin {
             }
         }
         self.cursor = 0;
-    }
-}
-
-impl Default for WeightedRoundRobin {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -277,12 +253,14 @@ impl BalanceStrategy for WeightedRoundRobin {
 ///
 /// Combine with `tunnel_count = N` for "use the best, but have N-1
 /// fallbacks ready".
+#[derive(Debug, Clone, Copy)]
 pub struct Failover {
     primary: usize,
     len: usize,
 }
 
 impl Failover {
+    /// Create a new failover strategy.
     pub fn new() -> Self {
         Self { primary: 0, len: 0 }
     }
@@ -328,17 +306,13 @@ impl BalanceStrategy for Failover {
 /// Weights (in microseconds):
 /// - `error_penalty = 500_000` (each error adds 500ms equivalent)
 /// - `load_penalty = 10_000` (each conn adds 10ms)
+#[derive(Debug, Clone, Copy)]
 pub struct HealthWeighted;
 
 impl HealthWeighted {
+    /// Create a new health-weighted strategy.
     pub fn new() -> Self {
         Self
-    }
-}
-
-impl Default for HealthWeighted {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -373,19 +347,15 @@ impl BalanceStrategy for HealthWeighted {
 /// remembers it. On every subsequent call, returns that same index
 /// regardless of changes in metrics. Dial errors are ignored — the pin
 /// is not released.
+#[derive(Debug, Clone, Copy)]
 pub struct Sticky {
     pinned: Option<usize>,
 }
 
 impl Sticky {
+    /// Create a new sticky strategy.
     pub fn new() -> Self {
         Self { pinned: None }
-    }
-}
-
-impl Default for Sticky {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -662,38 +632,47 @@ mod tests {
 //  Free constructors — return Box<dyn BalanceStrategy> for convenience.
 // ============================================================================
 
+/// Round-robin strategy. Even distribution, no metrics required.
 pub fn round_robin() -> Box<dyn BalanceStrategy> {
     Box::new(RoundRobin::new())
 }
 
+/// Random strategy. Stateless fallback when no metrics available.
 pub fn random() -> Box<dyn BalanceStrategy> {
     Box::new(Random::new())
 }
 
+/// Lowest-RTT strategy. Picks the tunnel with the lowest measured RTT.
 pub fn lowest_rtt() -> Box<dyn BalanceStrategy> {
     Box::new(LowestRtt::new())
 }
 
+/// Least-connections strategy. Picks the tunnel with the fewest active connections.
 pub fn least_connections() -> Box<dyn BalanceStrategy> {
     Box::new(LeastConnections::new())
 }
 
+/// Hash-by-address strategy. Same hostname always routes to the same tunnel.
 pub fn hash_by_addr() -> Box<dyn BalanceStrategy> {
     Box::new(HashByAddr::new())
 }
 
+/// Weighted round-robin. Weights by inverse RTT.
 pub fn weighted_round_robin() -> Box<dyn BalanceStrategy> {
     Box::new(WeightedRoundRobin::new())
 }
 
+/// Failover strategy. Uses primary tunnel until it fails, then rotates.
 pub fn failover() -> Box<dyn BalanceStrategy> {
     Box::new(Failover::new())
 }
 
+/// Health-weighted strategy. Scores by RTT + error penalty + load penalty.
 pub fn health_weighted() -> Box<dyn BalanceStrategy> {
     Box::new(HealthWeighted::new())
 }
 
+/// Sticky strategy. Pins to the first-chosen tunnel for the balancer's lifetime.
 pub fn sticky() -> Box<dyn BalanceStrategy> {
     Box::new(Sticky::new())
 }
