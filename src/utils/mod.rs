@@ -2,7 +2,6 @@
 
 #[cfg(feature = "discovery")]
 pub mod discovery;
-pub mod factory;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 pub mod health;

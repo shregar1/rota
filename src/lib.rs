@@ -95,6 +95,8 @@ pub mod enums;
 pub mod error;
 /// Structured error types.
 pub mod errors;
+/// Backend factory trait and output type.
+pub mod factory;
 pub mod utils;
 /// Core services (`LoadBalancer`, etc).
 pub mod services;
@@ -109,7 +111,6 @@ pub mod tower;
 pub use traits::backend as backend;
 pub use traits::strategy as strategy;
 pub use services::balancer as balancer;
-pub use utils::factory as factory;
 pub use utils::health as health;
 pub use utils::retry as retry;
 #[cfg(feature = "discovery")]
@@ -124,7 +125,7 @@ pub use traits::backend::{Backend, Connection};
 pub use services::balancer::{GuardedConnection, LoadBalancer};
 pub use constants::*;
 pub use error::Error;
-pub use utils::factory::{BackendFactory, BackendOutput};
+pub use factory::{BackendFactory, BackendOutput};
 pub use utils::health::{is_healthy, record_dial_result, HealthCheckConfig, HealthChecker, HealthState};
 pub use utils::retry::{
     is_transient_error, ExponentialBackoff, FixedRetry, NoRetry, RetryOnError, RetryPolicy,

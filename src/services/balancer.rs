@@ -13,7 +13,7 @@ use tracing::{debug, warn};
 
 use crate::traits::backend::{Backend, Connection};
 use crate::error::Error;
-use crate::utils::factory::{BackendFactory, BackendOutput};
+use crate::factory::{BackendFactory, BackendOutput};
 use crate::utils::retry::RetryPolicy;
 use crate::traits::strategy::{BalanceStrategy, PoolView, TunnelMetrics};
 
