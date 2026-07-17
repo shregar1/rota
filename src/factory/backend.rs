@@ -1,19 +1,8 @@
-//! The `BackendFactory` trait.
-//!
-//! Some backends can't be constructed up-front: a `WireGuard` tunnel needs a
-//! registration handshake; an SSH tunnel needs authentication; an HTTP
-//! CONNECT proxy needs a handshake. `BackendFactory` lets the load balancer
-//! bring backends up lazily, one per call to `create`.
-//!
-//! Use [`LoadBalancer::new`](crate::LoadBalancer::new) if you already have
-//! the backends. Use [`LoadBalancer::from_factories`](crate::LoadBalancer::from_factories)
-//! if you need creation.
-
 use async_trait::async_trait;
 
-use crate::backend::Backend;
 use crate::error::Error;
-use crate::strategy::TunnelMetrics;
+use crate::traits::backend::Backend;
+use crate::traits::strategy::TunnelMetrics;
 
 /// What a `BackendFactory::create` call returns: the live backend plus the
 /// metrics the load balancer should seed it with.

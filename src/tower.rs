@@ -16,7 +16,7 @@ mod tower_impl {
     use std::task::{Context, Poll};
 
     use crate::error::Error;
-    use crate::retry::RetryPolicy;
+    use crate::utils::retry::RetryPolicy;
     use tower::Service;
 
     /// A request for the load balancer service.
@@ -65,18 +65,18 @@ mod tower_impl {
     }
 
     /// A response from the load balancer: a connection to a backend.
-    pub type LbResponse = crate::balancer::GuardedConnection;
+    pub type LbResponse = crate::services::balancer::GuardedConnection;
 
     // Implement Tower Service for Arc<LoadBalancer>
     // Note: This is the recommended pattern for tower services that need internal state.
-    impl Service<LbRequest> for Arc<crate::balancer::LoadBalancer> {
+    impl Service<LbRequest> for Arc<crate::services::balancer::LoadBalancer> {
         type Response = LbResponse;
         type Error = Error;
         type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
         fn poll_ready(&mut self, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
             if self.backend_count() == 0 {
-                Poll::Ready(Err(Error::NoBackends))
+                Poll::Ready(Err(Error::no_backends()))
             } else {
                 Poll::Ready(Ok(()))
             }
@@ -97,6 +97,6 @@ mod tower_impl {
 
 // Re-export the tower types when the feature is enabled
 #[cfg(feature = "tower")]
-pub use crate::balancer::GuardedConnection;
+pub use crate::services::balancer::GuardedConnection;
 #[cfg(feature = "tower")]
 pub use tower_impl::{LbRequest, LbResponse};

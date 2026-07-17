@@ -17,7 +17,7 @@ use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::TlsConnector;
 
-use crate::backend::{Backend, Connection};
+use crate::traits::backend::{Backend, Connection};
 use crate::constants::DEFAULT_ALPN_PROTOCOLS;
 use crate::error::Error;
 
@@ -103,26 +103,26 @@ impl TlsConfig {
             for cert in certs {
                 root_store
                     .add(cert.clone())
-                    .map_err(|e| Error::Backend(format!("failed to add root cert: {e}")))?;
+                    .map_err(|e| Error::backend(format!("failed to add root cert: {e}")))?;
             }
         } else {
             let certs = rustls_native_certs::load_native_certs()
-                .map_err(|e| Error::Backend(format!("failed to load native certs: {e}")))?;
+                .map_err(|e| Error::backend(format!("failed to load native certs: {e}")))?;
             for cert in certs {
                 root_store
                     .add(cert)
-                    .map_err(|e| Error::Backend(format!("failed to add root cert: {e}")))?;
+                    .map_err(|e| Error::backend(format!("failed to add root cert: {e}")))?;
             }
         }
 
         let verifier: Arc<dyn ServerCertVerifier> = if self.verify_hostname {
             WebPkiServerVerifier::builder(Arc::new(root_store.clone()))
                 .build()
-                .map_err(|e| Error::Backend(format!("verifier builder: {e}")))?
+                .map_err(|e| Error::backend(format!("verifier builder: {e}")))?
         } else {
             let inner = WebPkiServerVerifier::builder(Arc::new(root_store.clone()))
                 .build()
-                .map_err(|e| Error::Backend(format!("verifier builder: {e}")))?;
+                .map_err(|e| Error::backend(format!("verifier builder: {e}")))?;
             Arc::new(NoHostnameVerifier(inner))
         };
 
@@ -133,7 +133,7 @@ impl TlsConfig {
         let mut config = if let Some((certs, key)) = self.client_cert {
             builder
                 .with_client_auth_cert(certs, key)
-                .map_err(|e| Error::Backend(format!("client cert: {e}")))?
+                .map_err(|e| Error::backend(format!("client cert: {e}")))?
         } else {
             builder.with_no_client_auth()
         };
@@ -187,22 +187,7 @@ impl ServerCertVerifier for NoHostnameVerifier {
     }
 }
 
-/// TLS error type.
-#[derive(Debug, thiserror::Error)]
-pub enum TlsError {
-    /// Rustls error.
-    #[error("rustls error: {0}")]
-    Rustls(#[from] rustls::Error),
-    /// IO error.
-    #[error("IO error: {0}")]
-    Io(#[from] io::Error),
-    /// Invalid server name.
-    #[error("Invalid server name: {0}")]
-    InvalidServerName(String),
-    /// Certificate error.
-    #[error("Certificate error: {0}")]
-    Certificate(String),
-}
+pub use crate::enums::tls::TlsError;
 
 /// A backend that wraps another backend with TLS.
 pub struct TlsBackend {
@@ -238,14 +223,14 @@ impl TlsBackend {
         conn: Connection,
     ) -> Result<Connection, Error> {
         let dns_name = rustls::pki_types::DnsName::try_from(server_name.as_str())
-            .map_err(|e| Error::Backend(format!("invalid server name: {e}")))?
+            .map_err(|e| Error::backend(format!("invalid server name: {e}")))?
             .to_owned();
         let server_name = ServerName::DnsName(dns_name);
 
         let tls_stream = connector
             .connect(server_name, conn)
             .await
-            .map_err(|e| Error::Backend(format!("TLS handshake failed: {e}")))?;
+            .map_err(|e| Error::backend(format!("TLS handshake failed: {e}")))?;
 
         Ok(Box::pin(TlsConnection { stream: tls_stream }))
     }
